@@ -1,0 +1,20 @@
+[package]
+name = "anemone-web"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "anemone-web"
+path = "src/main.rs"
+
+[dependencies]
+anemone-core = { path = "../anemone-core" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+axum = { version = "0.8", features = ["ws"] }
+tower-http = { version = "0.6", features = ["cors", "fs"] }
