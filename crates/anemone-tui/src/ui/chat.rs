@@ -37,9 +37,25 @@ pub fn draw(frame: &mut Frame, view: &AnemoneView, area: Rect) {
             (ChatSide::Right, Phase::Reflection) => (ACCENT, "  ~ ", Some("reflect")),
             (ChatSide::Right, Phase::Planning) => (BLUE, "  ? ", Some("plan")),
             (ChatSide::Right, _) => (GREEN, "  ❯ ", None),
-            (ChatSide::Left, _) => (YELLOW, "  ◁ ", Some("tool")),
+            (ChatSide::Left, _) => (TEXT_DIM, "  ◁ ", None),  // tool results: dim, no label
             (ChatSide::System, _) => (TEXT_MUTED, "  · ", None),
         };
+
+        // Tool results: collapse to single truncated line
+        if msg.side == ChatSide::Left {
+            let first_line = msg.text.lines().next().unwrap_or("");
+            let max = inner.width.saturating_sub(8) as usize;
+            let display: String = if first_line.len() > max {
+                format!("{}…", &first_line[..max.min(first_line.len())])
+            } else {
+                first_line.to_string()
+            };
+            lines.push(Line::from(vec![
+                Span::styled("  ◁ ", Style::default().fg(TEXT_MUTED)),
+                Span::styled(display, Style::default().fg(TEXT_DIM)),
+            ]));
+            continue;
+        }
 
         // Phase label on first line
         if let Some(label) = label {

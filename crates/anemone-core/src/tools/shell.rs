@@ -66,15 +66,6 @@ fn is_safe_command(command: &str) -> Option<String> {
         return Some("Blocked: '~' (home expansion) is not allowed.".into());
     }
 
-    // Block absolute paths (only relative paths from environment/ are allowed)
-    let abs_path_re = regex_lite::Regex::new(r"/[A-Za-z0-9_]").unwrap();
-    for token in stripped.split_whitespace() {
-        let clean = token.trim_start_matches(|c: char| "><=|;&(".contains(c));
-        if abs_path_re.is_match(clean) && !clean.starts_with("/dev/null") {
-            return Some("Blocked: absolute paths are not allowed. Use relative paths only (e.g. 'mkdir notes' not 'mkdir /home/user/notes'). Your working directory is already your environment folder.".into());
-        }
-    }
-
     None
 }
 
@@ -237,6 +228,29 @@ fn shell_escape(s: &str) -> String {
     }
 }
 
+/// Strip absolute paths from a command, converting them to relative.
+/// e.g. "mkdir /home/user/notes" → "mkdir notes"
+fn sanitize_paths(command: &str) -> String {
+    let abs_path_re = regex_lite::Regex::new(r"(/[A-Za-z0-9_][A-Za-z0-9_./+-]*)").unwrap();
+    let result = abs_path_re.replace_all(command, |caps: &regex_lite::Captures| {
+        let path = &caps[1];
+        if path.starts_with("/dev/null") {
+            return path.to_string();
+        }
+        // Extract the last meaningful component(s)
+        let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+        if parts.is_empty() {
+            ".".to_string()
+        } else if parts.len() <= 2 {
+            parts.last().unwrap_or(&".").to_string()
+        } else {
+            // Keep last 2 parts for nested paths
+            format!("{}/{}", parts[parts.len()-2], parts[parts.len()-1])
+        }
+    });
+    result.to_string()
+}
+
 /// Run a shell command sandboxed to the environment/ folder.
 pub fn run_command(command: &str, env_root: &Path) -> String {
     let real_root = env_root
@@ -248,7 +262,8 @@ pub fn run_command(command: &str, env_root: &Path) -> String {
         return err;
     }
 
-    let mut cmd = command.to_string();
+    // Auto-sanitize absolute paths to relative
+    let mut cmd = sanitize_paths(command);
 
     // Route python commands through the sandbox wrapper
     if let Some(rewritten) = rewrite_python_cmd(&cmd, env_root) {
@@ -346,9 +361,15 @@ mod tests {
     }
 
     #[test]
-    fn test_absolute_paths_blocked() {
-        assert!(is_safe_command("cat /etc/passwd").is_some());
-        assert!(is_safe_command("ls /usr/bin").is_some());
+    fn test_absolute_paths_sanitized() {
+        // Absolute paths are now auto-sanitized, not blocked
+        assert!(is_safe_command("cat /etc/passwd").is_none());
+        assert!(is_safe_command("ls /usr/bin").is_none());
+        // But they get stripped to relative in sanitize_paths
+        assert_eq!(sanitize_paths("mkdir /home/user/notes"), "mkdir user/notes");
+        assert_eq!(sanitize_paths("cat /etc/passwd"), "cat passwd");
+        assert_eq!(sanitize_paths("echo hi > /dev/null"), "echo hi > /dev/null");
+        assert_eq!(sanitize_paths("ls research/"), "ls research/");
     }
 
     #[test]
