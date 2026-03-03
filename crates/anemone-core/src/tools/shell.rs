@@ -71,7 +71,7 @@ fn is_safe_command(command: &str) -> Option<String> {
     for token in stripped.split_whitespace() {
         let clean = token.trim_start_matches(|c: char| "><=|;&(".contains(c));
         if abs_path_re.is_match(clean) && !clean.starts_with("/dev/null") {
-            return Some("Blocked: absolute paths are not allowed. Use relative paths only.".into());
+            return Some("Blocked: absolute paths are not allowed. Use relative paths only (e.g. 'mkdir notes' not 'mkdir /home/user/notes'). Your working directory is already your environment folder.".into());
         }
     }
 
