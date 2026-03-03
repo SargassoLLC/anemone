@@ -150,7 +150,7 @@ impl App {
                             } else if provider.needs_url {
                                 state.step = SetupStep::CustomUrlInput;
                             } else {
-                                state.step = SetupStep::Complete;
+                                state.step = SetupStep::NameInput;
                             }
                         }
                     }
@@ -175,10 +175,10 @@ impl App {
                                 if provider.needs_url {
                                     state.step = SetupStep::CustomUrlInput;
                                 } else {
-                                    state.step = SetupStep::Complete;
+                                    state.step = SetupStep::NameInput;
                                 }
                             } else {
-                                state.step = SetupStep::Complete;
+                                state.step = SetupStep::NameInput;
                             }
                         }
                     }
@@ -206,7 +206,7 @@ impl App {
                             // Default to localhost Ollama
                             state.url_input = "http://localhost:11434".to_string();
                         }
-                        state.step = SetupStep::Complete;
+                        state.step = SetupStep::NameInput;
                     }
                     KeyCode::Esc => {
                         // Back: if key was needed go back to key input, else provider select
@@ -219,6 +219,58 @@ impl App {
                         }
                     }
                     _ => {}
+                }
+            }
+
+            // ── Name input ───────────────────────────────────────────────────
+            SetupStep::NameInput => {
+                match key {
+                    KeyCode::Char(c) => {
+                        state.name_input.push(c);
+                    }
+                    KeyCode::Backspace => {
+                        state.name_input.pop();
+                    }
+                    KeyCode::Enter => {
+                        if state.name_input.trim().is_empty() {
+                            state.name_input = "coral".to_string();
+                        }
+                        state.step = SetupStep::EntropyMash;
+                    }
+                    KeyCode::Esc => {
+                        if let Some(provider) = state.providers.get(state.selected_provider) {
+                            if provider.needs_url {
+                                state.step = SetupStep::CustomUrlInput;
+                            } else if provider.needs_key {
+                                state.step = SetupStep::ApiKeyInput;
+                            } else {
+                                state.step = SetupStep::ProviderSelect;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            // ── Entropy mash ─────────────────────────────────────────────────
+            SetupStep::EntropyMash => {
+                match key {
+                    KeyCode::Char(c) => {
+                        state.entropy_input.push(c);
+                        state.entropy_count += 1;
+                    }
+                    KeyCode::Enter => {
+                        if state.entropy_count >= 20 {
+                            state.step = SetupStep::Complete;
+                        }
+                    }
+                    KeyCode::Esc => {
+                        state.step = SetupStep::NameInput;
+                    }
+                    _ => {
+                        state.entropy_input.push('?');
+                        state.entropy_count += 1;
+                    }
                 }
             }
 
@@ -249,6 +301,32 @@ impl App {
             }
             if !state.url_input.is_empty() {
                 new_config.base_url = Some(state.url_input.clone());
+            }
+
+            // Create the first anemone identity
+            let name = if state.name_input.trim().is_empty() {
+                "coral".to_string()
+            } else {
+                state.name_input.trim().to_string()
+            };
+
+            let seed_bytes = if state.entropy_input.is_empty() {
+                // Fallback: random seed
+                use rand::RngCore;
+                let mut bytes = [0u8; 32];
+                rand::thread_rng().fill_bytes(&mut bytes);
+                bytes.to_vec()
+            } else {
+                use sha2::{Sha256, Digest};
+                let mut hasher = Sha256::new();
+                hasher.update(state.entropy_input.as_bytes());
+                hasher.finalize().to_vec()
+            };
+
+            let ident = identity::create_identity(&name, &seed_bytes);
+            let box_path = project_root.join(format!("{}_box", name.to_lowercase()));
+            if let Err(e) = identity::save_identity(&ident, &box_path) {
+                tracing::warn!("Failed to save identity: {e}");
             }
         }
 

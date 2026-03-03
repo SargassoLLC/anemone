@@ -23,6 +23,8 @@ pub enum SetupStep {
     ProviderSelect,
     ApiKeyInput,
     CustomUrlInput,
+    NameInput,
+    EntropyMash,
     Complete,
 }
 
@@ -53,6 +55,9 @@ pub struct SetupState {
     pub url_input: String,
     pub key_masked: bool,
     pub validation_status: ValidationStatus,
+    pub name_input: String,
+    pub entropy_input: String,
+    pub entropy_count: usize,
 }
 
 impl SetupState {
@@ -98,6 +103,9 @@ impl SetupState {
             url_input: String::new(),
             key_masked: true,
             validation_status: ValidationStatus::None,
+            name_input: String::new(),
+            entropy_input: String::new(),
+            entropy_count: 0,
         }
     }
 
@@ -159,6 +167,8 @@ pub fn draw_setup(frame: &mut Frame, area: Rect, state: &Option<SetupState>) {
         SetupStep::ProviderSelect => draw_provider_select(frame, area, state),
         SetupStep::ApiKeyInput => draw_api_key_input(frame, area, state),
         SetupStep::CustomUrlInput => draw_custom_url_input(frame, area, state),
+        SetupStep::NameInput => draw_name_input(frame, area, state),
+        SetupStep::EntropyMash => draw_entropy_mash(frame, area, state),
         SetupStep::Complete => draw_setup_complete(frame, area, state),
     }
 }
@@ -412,7 +422,147 @@ pub fn draw_custom_url_input(frame: &mut Frame, area: Rect, state: &SetupState) 
     frame.render_widget(hint, chunks[6]);
 }
 
-// ─── Screen 4: Setup complete ────────────────────────────────────────────────
+// ─── Screen 4: Name input ────────────────────────────────────────────────────
+
+pub fn draw_name_input(frame: &mut Frame, area: Rect, state: &SetupState) {
+    let popup = centered_rect(55, 50, area);
+    let outer = wizard_block("🪸 anemone › name");
+    let inner = outer.inner(popup);
+    frame.render_widget(outer, popup);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints([
+            Constraint::Length(2), // prompt
+            Constraint::Length(1), // spacer
+            Constraint::Length(3), // name input
+            Constraint::Min(0),    // padding
+            Constraint::Length(1), // separator
+            Constraint::Length(1), // hint
+        ])
+        .split(inner);
+
+    let prompt = Paragraph::new(vec![
+        Line::from(Span::styled(
+            "What will you name your anemone?",
+            Style::default().fg(TEXT),
+        )),
+        Line::from(Span::styled(
+            "This becomes its identity — choose wisely.",
+            Style::default().fg(DIM),
+        )),
+    ]);
+    frame.render_widget(prompt, chunks[0]);
+
+    let display = if state.name_input.is_empty() {
+        Span::styled("coral", Style::default().fg(Color::Rgb(60, 60, 60)))
+    } else {
+        Span::styled(&state.name_input, Style::default().fg(TEXT))
+    };
+    let name_box = Paragraph::new(Line::from(display)).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(ACCENT_DIM)),
+    );
+    frame.render_widget(name_box, chunks[2]);
+
+    let sep = Paragraph::new("─".repeat(inner.width.saturating_sub(2) as usize))
+        .style(Style::default().fg(Color::Rgb(60, 60, 60)));
+    frame.render_widget(sep, chunks[4]);
+
+    let hint = Paragraph::new(Line::from(vec![
+        Span::styled("enter", Style::default().fg(ACCENT)),
+        Span::styled(" confirm  ", Style::default().fg(DIM)),
+        Span::styled("esc", Style::default().fg(ACCENT)),
+        Span::styled(" back", Style::default().fg(DIM)),
+    ]));
+    frame.render_widget(hint, chunks[5]);
+}
+
+// ─── Screen 5: Entropy mash ─────────────────────────────────────────────────
+
+pub fn draw_entropy_mash(frame: &mut Frame, area: Rect, state: &SetupState) {
+    let popup = centered_rect(55, 55, area);
+    let outer = wizard_block("🪸 anemone › genome");
+    let inner = outer.inner(popup);
+    frame.render_widget(outer, popup);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints([
+            Constraint::Length(3), // prompt
+            Constraint::Length(1), // spacer
+            Constraint::Length(3), // entropy display
+            Constraint::Length(1), // spacer
+            Constraint::Length(1), // progress
+            Constraint::Min(0),    // padding
+            Constraint::Length(1), // separator
+            Constraint::Length(1), // hint
+        ])
+        .split(inner);
+
+    let prompt = Paragraph::new(vec![
+        Line::from(Span::styled(
+            "Seed its genome with entropy.",
+            Style::default().fg(TEXT),
+        )),
+        Line::from(Span::styled(
+            "Mash your keyboard — every character and its",
+            Style::default().fg(DIM),
+        )),
+        Line::from(Span::styled(
+            "timing shapes who it becomes. Be random!",
+            Style::default().fg(DIM),
+        )),
+    ]);
+    frame.render_widget(prompt, chunks[0]);
+
+    // Show entropy as dots/chars
+    let display_chars: String = state.entropy_input.chars().map(|_| '▓').collect();
+    let entropy_box = Paragraph::new(Line::from(Span::styled(
+        if display_chars.is_empty() { "..." } else { &display_chars },
+        Style::default().fg(ACCENT),
+    ))).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(ACCENT_DIM)),
+    ).wrap(Wrap { trim: false });
+    frame.render_widget(entropy_box, chunks[2]);
+
+    // Progress bar
+    let target = 20;
+    let current = state.entropy_count.min(target);
+    let filled = "█".repeat(current);
+    let empty = "░".repeat(target - current);
+    let pct = (current * 100) / target;
+    let progress_text = format!("  {filled}{empty}  {}/{} keystrokes ({pct}%)", current, target);
+    let color = if current >= target { SUCCESS } else { ACCENT };
+    let progress = Paragraph::new(progress_text).style(Style::default().fg(color));
+    frame.render_widget(progress, chunks[4]);
+
+    let sep = Paragraph::new("─".repeat(inner.width.saturating_sub(2) as usize))
+        .style(Style::default().fg(Color::Rgb(60, 60, 60)));
+    frame.render_widget(sep, chunks[6]);
+
+    let hint_text = if current >= target {
+        Line::from(vec![
+            Span::styled("enter", Style::default().fg(SUCCESS)),
+            Span::styled(" birth anemone!", Style::default().fg(TEXT).add_modifier(Modifier::BOLD)),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled("keep mashing...", Style::default().fg(DIM)),
+        ])
+    };
+    let hint = Paragraph::new(hint_text);
+    frame.render_widget(hint, chunks[7]);
+}
+
+// ─── Screen 6: Setup complete ────────────────────────────────────────────────
 
 pub fn draw_setup_complete(frame: &mut Frame, area: Rect, state: &SetupState) {
     let popup = centered_rect(55, 45, area);
