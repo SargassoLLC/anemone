@@ -246,8 +246,8 @@ async fn main() -> io::Result<()> {
                             // Scroll
                             (KeyCode::Up, _) if !app.input_focused => app.scroll_up(),
                             (KeyCode::Down, _) if !app.input_focused => app.scroll_down(),
-                            (KeyCode::PageUp, _) => app.scroll_up(),
-                            (KeyCode::PageDown, _) => app.scroll_down(),
+                            (KeyCode::PageUp, _) => app.page_up(),
+                            (KeyCode::PageDown, _) => app.page_down(),
                             _ => {}
                         }
                     }

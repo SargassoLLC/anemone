@@ -25,14 +25,11 @@ pub fn draw(frame: &mut Frame, view: &AnemoneView, area: Rect) {
         return;
     }
 
-    // Build display lines from messages (bottom-up with scroll offset)
+    // Build ALL display lines, then scroll
     let visible_height = inner.height as usize;
-    let total = view.messages.len();
-    let end = total.saturating_sub(view.scroll_offset);
-    let start = end.saturating_sub(visible_height * 3); // overshoot for wrapping
 
     let mut lines: Vec<Line> = Vec::new();
-    for (i, msg) in view.messages[start..end].iter().enumerate() {
+    for msg in view.messages.iter() {
         let (fg, prefix, label) = match (&msg.side, &msg.phase) {
             (ChatSide::Right, Phase::Reflection) => (ACCENT, "  ~ ", Some("reflect")),
             (ChatSide::Right, Phase::Planning) => (BLUE, "  ? ", Some("plan")),
@@ -120,6 +117,20 @@ pub fn draw(frame: &mut Frame, view: &AnemoneView, area: Rect) {
         lines.push(Line::from(""));
     }
 
-    let paragraph = Paragraph::new(lines);
+    // Auto-scroll to bottom, offset scrolls up from there
+    let total_lines = lines.len();
+    let scroll_y = if total_lines > visible_height {
+        (total_lines - visible_height).saturating_sub(0) // at bottom
+            .saturating_sub(view.scroll_offset) // user scroll
+            .max(0)
+    } else {
+        0
+    };
+
+    // Clamp scroll_offset so it doesn't go past the top
+    let max_scroll = total_lines.saturating_sub(visible_height);
+
+    let paragraph = Paragraph::new(lines)
+        .scroll((scroll_y as u16, 0));
     frame.render_widget(paragraph, inner);
 }

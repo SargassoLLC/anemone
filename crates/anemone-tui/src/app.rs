@@ -578,13 +578,25 @@ impl App {
 
     pub fn scroll_up(&mut self) {
         if let Some(view) = self.active_view_mut() {
-            view.scroll_offset = view.scroll_offset.saturating_add(3);
+            view.scroll_offset = view.scroll_offset.saturating_add(5);
         }
     }
 
     pub fn scroll_down(&mut self) {
         if let Some(view) = self.active_view_mut() {
-            view.scroll_offset = view.scroll_offset.saturating_sub(3);
+            view.scroll_offset = view.scroll_offset.saturating_sub(5);
+        }
+    }
+
+    pub fn page_up(&mut self) {
+        if let Some(view) = self.active_view_mut() {
+            view.scroll_offset = view.scroll_offset.saturating_add(20);
+        }
+    }
+
+    pub fn page_down(&mut self) {
+        if let Some(view) = self.active_view_mut() {
+            view.scroll_offset = view.scroll_offset.saturating_sub(20);
         }
     }
 
