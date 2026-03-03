@@ -59,8 +59,6 @@ pub fn draw(frame: &mut Frame, view: &AnemoneView, area: Rect) {
                     '◇' => Style::default().fg(Color::Rgb(100, 70, 40)), // door
                     _ => Style::default().fg(Color::Rgb(25, 25, 32)), // floor
                 };
-                let display = if ch == ' ' { " " } else { &row[x..x+1] };
-                // Handle multi-byte chars
                 spans.push(Span::styled(
                     ch.to_string(),
                     style,
