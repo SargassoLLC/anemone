@@ -100,9 +100,8 @@ async fn main() -> io::Result<()> {
 
             // Subscribe to events
             let rx = {
-                // We can't .await here so we use a blocking read
-                // SAFETY: at startup the brain isn't yet running so try_read always succeeds
-                let brain = brain_arc.blocking_read();
+                // Use try_read to avoid blocking_read panic inside tokio runtime
+                let brain = brain_arc.try_read().expect("brain lock should be free at startup");
                 brain.subscribe()
             };
 
