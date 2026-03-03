@@ -37,14 +37,34 @@ pub fn draw(frame: &mut Frame, view: &AnemoneView, area: Rect) {
             (ChatSide::System, _) => (Color::DarkGray, "  "),
         };
 
-        // Truncate long messages for display
-        let display: String = msg.text.chars().take(500).collect();
-        for line in display.lines() {
-            lines.push(Line::styled(
-                format!("{}{}", prefix, line),
-                Style::default().fg(fg),
-            ));
+        // Word-wrap long messages — no truncation
+        let width = inner.width.saturating_sub(3) as usize; // account for prefix
+        for line in msg.text.lines() {
+            let prefixed = format!("{}{}", prefix, line);
+            if prefixed.len() <= width || width == 0 {
+                lines.push(Line::styled(prefixed, Style::default().fg(fg)));
+            } else {
+                // Manual word wrap
+                let words: Vec<&str> = line.split_whitespace().collect();
+                let mut current = String::from(prefix);
+                for word in words {
+                    if current.len() + word.len() + 1 > width && current.len() > prefix.len() {
+                        lines.push(Line::styled(current, Style::default().fg(fg)));
+                        current = format!("  {}", word); // indent continuation
+                    } else {
+                        if current.len() > prefix.len() {
+                            current.push(' ');
+                        }
+                        current.push_str(word);
+                    }
+                }
+                if !current.is_empty() {
+                    lines.push(Line::styled(current, Style::default().fg(fg)));
+                }
+            }
+            // Blank line between thoughts for readability
         }
+        lines.push(Line::from(""));
     }
 
     let paragraph = Paragraph::new(lines)
