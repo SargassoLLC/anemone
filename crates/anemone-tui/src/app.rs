@@ -295,11 +295,28 @@ impl App {
             if let Some(provider) = state.providers.get(state.selected_provider) {
                 new_config.provider = provider.provider_id.clone();
                 new_config.model = provider.default_model.clone();
+
+                // Resolve base_url from provider presets
+                match provider.provider_id.as_str() {
+                    "openrouter" => {
+                        new_config.base_url = Some("https://openrouter.ai/api/v1".to_string());
+                    }
+                    "ollama" => {
+                        new_config.base_url = Some(
+                            if state.url_input.is_empty() {
+                                "http://localhost:11434".to_string()
+                            } else {
+                                state.url_input.clone()
+                            }
+                        );
+                    }
+                    _ => {}
+                }
             }
             if !state.key_input.is_empty() {
                 new_config.api_key = Some(state.key_input.clone());
             }
-            if !state.url_input.is_empty() {
+            if !state.url_input.is_empty() && new_config.base_url.is_none() {
                 new_config.base_url = Some(state.url_input.clone());
             }
 
