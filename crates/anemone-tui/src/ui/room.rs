@@ -1,60 +1,68 @@
-//! ASCII/Unicode room visualization.
-//! Maps the 12x12 tile grid to a compact text display.
+//! ASCII room visualization — cozy, minimal, with personality.
 
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
 use anemone_core::types::ROOM_LOCATIONS;
 use crate::app::AnemoneView;
+use super::{ACCENT, ACCENT_DIM, BORDER, TEXT_DIM, TEXT_MUTED, BG, YELLOW, CYAN};
 
-/// Room tiles represented as simple characters.
+/// Room layout — compact and cozy
 const ROOM_ART: [&str; 12] = [
-    "############",
-    "#..........#",
-    "#.[]..[]...#",
-    "#..........#",
-    "#....##....#",
-    "#....##....#",
-    "#..........#",
-    "#.[]..[]...#",
-    "#..........#",
-    "#..........#",
-    "#.....D....#",
-    "############",
+    "╭──────────╮",
+    "│          │",
+    "│ ▫▫  ▫▫  │",
+    "│          │",
+    "│   ░░░░   │",
+    "│   ░░░░   │",
+    "│          │",
+    "│ ▫▫  ▫▫  │",
+    "│          │",
+    "│          │",
+    "│     ◇    │",
+    "╰──────────╯",
 ];
 
 pub fn draw(frame: &mut Frame, view: &AnemoneView, area: Rect) {
     let block = Block::default()
-        .title(format!(" {} ", view.name))
+        .title(Span::styled(
+            format!(" {} ", view.name),
+            Style::default().fg(ACCENT).bold(),
+        ))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray));
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(BORDER))
+        .style(Style::default().bg(BG));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    // Build room lines with character position
-    let mut lines: Vec<Line> = Vec::new();
     let px = view.position.x as usize;
     let py = view.position.y as usize;
 
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::from("")); // top padding
+
     for (y, row) in ROOM_ART.iter().enumerate() {
         let mut spans: Vec<Span> = Vec::new();
-        // Add leading space for centering
-        spans.push(Span::raw(" "));
+        spans.push(Span::raw("  ")); // left padding
 
         for (x, ch) in row.chars().enumerate() {
             if x == px && y == py {
-                spans.push(Span::styled("@", Style::default().fg(Color::Yellow).bold()));
+                // The anemone! 🪸
+                spans.push(Span::styled("@", Style::default().fg(ACCENT).bold()));
             } else {
                 let style = match ch {
-                    '#' => Style::default().fg(Color::DarkGray),
-                    '.' => Style::default().fg(Color::Rgb(40, 40, 40)),
-                    '[' | ']' => Style::default().fg(Color::Rgb(80, 60, 40)),
-                    'D' => Style::default().fg(Color::Rgb(139, 90, 43)),
-                    _ => Style::default().fg(Color::DarkGray),
+                    '╭' | '╮' | '╰' | '╯' | '│' | '─' => Style::default().fg(TEXT_MUTED),
+                    '░' => Style::default().fg(Color::Rgb(35, 35, 45)), // rug
+                    '▫' => Style::default().fg(Color::Rgb(70, 55, 40)), // furniture
+                    '◇' => Style::default().fg(Color::Rgb(100, 70, 40)), // door
+                    _ => Style::default().fg(Color::Rgb(25, 25, 32)), // floor
                 };
+                let display = if ch == ' ' { " " } else { &row[x..x+1] };
+                // Handle multi-byte chars
                 spans.push(Span::styled(
-                    if ch == '.' { " " } else { &row[x..x + 1] },
+                    ch.to_string(),
                     style,
                 ));
             }
@@ -62,13 +70,13 @@ pub fn draw(frame: &mut Frame, view: &AnemoneView, area: Rect) {
         lines.push(Line::from(spans));
     }
 
-    // Add location label
+    // Location label
     let location = find_location(px, py);
-    lines.push(Line::raw(""));
-    lines.push(Line::styled(
-        format!(" {}", location),
-        Style::default().fg(Color::Cyan).italic(),
-    ));
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("  📍 ", Style::default().fg(TEXT_MUTED)),
+        Span::styled(location, Style::default().fg(CYAN).italic()),
+    ]));
 
     let paragraph = Paragraph::new(lines);
     frame.render_widget(paragraph, inner);
@@ -80,7 +88,6 @@ fn find_location(x: usize, y: usize) -> &'static str {
             return name;
         }
     }
-    // Find nearest named location
     let mut best = "room";
     let mut best_dist = u32::MAX;
     for &(name, lx, ly) in ROOM_LOCATIONS {

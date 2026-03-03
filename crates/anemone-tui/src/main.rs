@@ -148,7 +148,14 @@ async fn main() -> io::Result<()> {
     }
 
     // ── Main event loop ────────────────────────────────────────────────────────
+    let mut last_file_refresh = std::time::Instant::now();
     loop {
+        // Refresh file listings every 5 seconds
+        if last_file_refresh.elapsed() > Duration::from_secs(5) {
+            app.refresh_files();
+            last_file_refresh = std::time::Instant::now();
+        }
+
         // ── Draw ──────────────────────────────────────────────────────────────
         terminal.draw(|frame| {
             match app.mode {

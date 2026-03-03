@@ -61,6 +61,8 @@ pub struct AnemoneView {
     pub scroll_offset: usize,
     pub brain: Arc<RwLock<Brain>>,
     pub command_tx: tokio::sync::mpsc::Sender<BrainCommand>,
+    pub files: Vec<String>,
+    pub box_path: std::path::PathBuf,
 }
 
 // ─── App ─────────────────────────────────────────────────────────────────────
@@ -387,9 +389,12 @@ impl App {
                         .to_string();
 
                     let name = ident.name.clone();
+                    let box_path_clone = box_path.clone();
                     let brain = Brain::new(ident, box_path, config.clone());
                     let command_tx = brain.command_sender();
                     let brain_arc = Arc::new(RwLock::new(brain));
+
+                    let files = scan_box_files(&box_path_clone);
 
                     anemones.push(AnemoneView {
                         id: anemone_id,
@@ -402,6 +407,8 @@ impl App {
                         scroll_offset: 0,
                         brain: brain_arc,
                         command_tx,
+                        files,
+                        box_path: box_path_clone,
                     });
                 }
             }
@@ -580,4 +587,47 @@ impl App {
             view.scroll_offset = view.scroll_offset.saturating_sub(3);
         }
     }
+
+    /// Refresh file listings for all anemones
+    pub fn refresh_files(&mut self) {
+        for view in &mut self.anemones {
+            view.files = scan_box_files(&view.box_path);
+        }
+    }
+}
+
+/// Scan an anemone's box directory for display in the file tree
+fn scan_box_files(box_path: &std::path::Path) -> Vec<String> {
+    let mut files = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(box_path) {
+        let mut items: Vec<_> = entries.filter_map(|e| e.ok()).collect();
+        items.sort_by_key(|e| e.file_name());
+        for entry in items {
+            let name = entry.file_name().to_string_lossy().to_string();
+            // Skip hidden files
+            if name.starts_with('.') {
+                continue;
+            }
+            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                files.push(format!("{}/", name));
+                // Show first level of subdirectory
+                if let Ok(sub) = std::fs::read_dir(entry.path()) {
+                    let mut sub_items: Vec<_> = sub.filter_map(|e| e.ok()).collect();
+                    sub_items.sort_by_key(|e| e.file_name());
+                    for sub_entry in sub_items.iter().take(5) {
+                        let sub_name = sub_entry.file_name().to_string_lossy().to_string();
+                        if !sub_name.starts_with('.') {
+                            files.push(format!("  {}", sub_name));
+                        }
+                    }
+                    if sub_items.len() > 5 {
+                        files.push(format!("  ...+{}", sub_items.len() - 5));
+                    }
+                }
+            } else {
+                files.push(name);
+            }
+        }
+    }
+    files
 }
