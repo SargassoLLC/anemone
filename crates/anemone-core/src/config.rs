@@ -3,6 +3,20 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::time::Instant;
+
+/// Result of an API key validation attempt.
+#[derive(Debug, Clone)]
+pub struct KeyValidation {
+    /// Whether the key is valid and the endpoint responded successfully.
+    pub valid: bool,
+    /// Model name echoed back (or the model we sent).
+    pub model: String,
+    /// Round-trip latency in milliseconds.
+    pub latency_ms: u64,
+    /// Error message if the key is invalid or the request failed.
+    pub error: Option<String>,
+}
 
 /// Known provider presets
 const PROVIDER_PRESETS: &[(&str, Option<&str>)] = &[
@@ -188,6 +202,113 @@ impl Config {
         Self::load(&config_path)
     }
 
+    /// Serialize this config to YAML and write it to `config_path`.
+    ///
+    /// The `project_root` field is skipped automatically (it has `#[serde(skip)]`).
+    pub fn save(&self, config_path: &Path) -> Result<()> {
+        let yaml = serde_yaml::to_string(self).context("Failed to serialize config to YAML")?;
+        if let Some(parent) = config_path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("Failed to create config directory: {}", parent.display()))?;
+        }
+        std::fs::write(config_path, yaml)
+            .with_context(|| format!("Failed to write config to: {}", config_path.display()))?;
+        Ok(())
+    }
+
+    /// Make a minimal API call to verify the configured key works.
+    ///
+    /// Sends a single-token chat completion request and measures latency.
+    /// Returns [`KeyValidation`] regardless of success or failure.
+    pub async fn validate_key(&self) -> Result<KeyValidation> {
+        let api_key = match &self.api_key {
+            Some(k) if !k.is_empty() => k.clone(),
+            _ => {
+                return Ok(KeyValidation {
+                    valid: false,
+                    model: self.model.clone(),
+                    latency_ms: 0,
+                    error: Some("No API key configured".into()),
+                });
+            }
+        };
+
+        // Build the endpoint URL: base_url already includes the path prefix for
+        // known providers (e.g. https://openrouter.ai/api/v1), so we just append
+        // /chat/completions.  For openai the default is https://api.openai.com/v1.
+        let base = self
+            .base_url
+            .as_deref()
+            .unwrap_or("https://api.openai.com/v1")
+            .trim_end_matches('/');
+        let url = format!("{}/chat/completions", base);
+
+        let body = serde_json::json!({
+            "model": self.model,
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 1
+        });
+
+        let client = reqwest::Client::new();
+        let start = Instant::now();
+
+        let response = client
+            .post(&url)
+            .bearer_auth(&api_key)
+            .json(&body)
+            .send()
+            .await;
+
+        let latency_ms = start.elapsed().as_millis() as u64;
+
+        match response {
+            Err(e) => Ok(KeyValidation {
+                valid: false,
+                model: self.model.clone(),
+                latency_ms,
+                error: Some(format!("Request failed: {}", e)),
+            }),
+            Ok(resp) => {
+                let status = resp.status();
+                if status.is_success() {
+                    // Try to pull the model name from the response body
+                    let model = resp
+                        .json::<serde_json::Value>()
+                        .await
+                        .ok()
+                        .and_then(|v| v["model"].as_str().map(String::from))
+                        .unwrap_or_else(|| self.model.clone());
+                    Ok(KeyValidation {
+                        valid: true,
+                        model,
+                        latency_ms,
+                        error: None,
+                    })
+                } else {
+                    let error_body = resp.text().await.unwrap_or_default();
+                    Ok(KeyValidation {
+                        valid: false,
+                        model: self.model.clone(),
+                        latency_ms,
+                        error: Some(format!("HTTP {}: {}", status, error_body.trim())),
+                    })
+                }
+            }
+        }
+    }
+
+    /// Strip line-break characters and trim surrounding whitespace from a secret
+    /// string.  Mirrors OpenClaw's `normalizeSecretInput` helper.
+    ///
+    /// Characters removed: `\r`, `\n`, Unicode line separator (U+2028),
+    /// Unicode paragraph separator (U+2029).
+    pub fn normalize_secret(input: &str) -> String {
+        input
+            .replace(['\r', '\n', '\u{2028}', '\u{2029}'], "")
+            .trim()
+            .to_string()
+    }
+
     /// Resolve the environment path for a given box directory
     pub fn resolve_env_path(&self, box_path: &Path) -> PathBuf {
         if let Some(ref env) = self.environment_path {
@@ -270,5 +391,61 @@ mod tests {
 
         let result = Config::load(tmp.path());
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_save_and_reload() {
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.yaml");
+
+        // Build a config with non-default values to make sure round-trip works
+        let mut original = Config::default();
+        original.provider = "openrouter".into();
+        original.model = "openai/gpt-4o".into();
+        original.thinking_pace_seconds = 30;
+        original.reflection_threshold = 75.0;
+        // project_root must NOT appear in the saved YAML (it's #[serde(skip)])
+        original.project_root = dir.path().to_path_buf();
+
+        original.save(&config_path).expect("save should succeed");
+
+        // The saved file must be valid YAML that load() can parse
+        let reloaded = Config::load(&config_path).expect("reload should succeed");
+
+        assert_eq!(reloaded.provider, "openrouter");
+        assert_eq!(reloaded.model, "openai/gpt-4o");
+        assert_eq!(reloaded.thinking_pace_seconds, 30);
+        assert_eq!(reloaded.reflection_threshold, 75.0);
+
+        // Verify project_root was NOT persisted — it should be re-resolved by load()
+        let saved_yaml = std::fs::read_to_string(&config_path).unwrap();
+        assert!(
+            !saved_yaml.contains("project_root"),
+            "project_root must not appear in saved YAML"
+        );
+    }
+
+    #[test]
+    fn test_normalize_secret() {
+        // Strips \r\n
+        assert_eq!(Config::normalize_secret("sk-abc\r\n"), "sk-abc");
+        // Strips bare \n
+        assert_eq!(Config::normalize_secret("sk-abc\n"), "sk-abc");
+        // Strips bare \r
+        assert_eq!(Config::normalize_secret("sk-abc\r"), "sk-abc");
+        // Strips Unicode line separator (U+2028)
+        assert_eq!(Config::normalize_secret("sk-abc\u{2028}"), "sk-abc");
+        // Strips Unicode paragraph separator (U+2029)
+        assert_eq!(Config::normalize_secret("sk-abc\u{2029}"), "sk-abc");
+        // Trims surrounding whitespace
+        assert_eq!(Config::normalize_secret("  sk-abc  "), "sk-abc");
+        // Embedded newlines removed, not just trimmed
+        assert_eq!(Config::normalize_secret("sk\nabc"), "skabc");
+        // Clean string unchanged
+        assert_eq!(Config::normalize_secret("sk-abc123"), "sk-abc123");
+        // Empty string
+        assert_eq!(Config::normalize_secret(""), "");
     }
 }

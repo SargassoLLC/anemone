@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crossterm::event::KeyCode;
 use tokio::sync::RwLock;
 
 use anemone_core::brain::{Brain, BrainCommand};
@@ -10,6 +11,21 @@ use anemone_core::config::Config;
 use anemone_core::events::BrainEvent;
 use anemone_core::identity;
 use anemone_core::types::*;
+
+use crate::ui::setup::{SetupState, SetupStep};
+
+// ─── AppMode ──────────────────────────────────────────────────────────────────
+
+/// Top-level application mode — controls which screen is rendered.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AppMode {
+    /// First-run setup wizard: guides user through provider + API key config.
+    Setup,
+    /// Normal TUI: anemone room, chat feed, input bar.
+    Running,
+}
+
+// ─── Chat / view types ────────────────────────────────────────────────────────
 
 /// A message in the chat feed.
 #[derive(Clone)]
@@ -47,8 +63,18 @@ pub struct AnemoneView {
     pub command_tx: tokio::sync::mpsc::Sender<BrainCommand>,
 }
 
+// ─── App ─────────────────────────────────────────────────────────────────────
+
 /// The main application state.
 pub struct App {
+    // ── Mode ────────────────────────────────────────────────────────────────
+    /// Current top-level application mode.
+    pub mode: AppMode,
+
+    /// Setup wizard state — `Some` while in Setup mode, `None` otherwise.
+    pub setup_state: Option<SetupState>,
+
+    // ── Running-mode state ──────────────────────────────────────────────────
     pub anemones: Vec<AnemoneView>,
     pub active_tab: usize,
     pub input: String,
@@ -57,14 +83,188 @@ pub struct App {
 }
 
 impl App {
-    /// Discover anemones and create the App.
-    pub fn new(
-        project_root: &Path,
-        config: &Config,
-    ) -> Self {
+    /// Discover anemones and create the App in the given initial mode.
+    ///
+    /// When `initial_mode` is [`AppMode::Setup`] the anemone list is **not**
+    /// populated yet — `finish_setup` must be called once setup is complete.
+    pub fn new(project_root: &Path, config: &Config, initial_mode: AppMode) -> Self {
+        let setup_state = if initial_mode == AppMode::Setup {
+            Some(SetupState::new())
+        } else {
+            None
+        };
+
+        let anemones = if initial_mode == AppMode::Running {
+            Self::discover_anemones(project_root, config)
+        } else {
+            Vec::new()
+        };
+
+        App {
+            mode: initial_mode,
+            setup_state,
+            anemones,
+            active_tab: 0,
+            input: String::new(),
+            input_focused: true,
+            should_quit: false,
+        }
+    }
+
+    // ── Setup helpers ─────────────────────────────────────────────────────────
+
+    /// Handle a key event while in Setup mode.
+    ///
+    /// Returns `true` when setup has completed (caller should save config and
+    /// transition to `AppMode::Running`).
+    pub fn handle_setup_key(&mut self, key: KeyCode) -> bool {
+        let Some(state) = self.setup_state.as_mut() else {
+            return false;
+        };
+
+        match &state.step {
+            // ── Provider selection ──────────────────────────────────────────
+            SetupStep::ProviderSelect => {
+                let count = state.providers.len();
+                match key {
+                    KeyCode::Up => {
+                        if state.selected_provider > 0 {
+                            state.selected_provider -= 1;
+                        } else {
+                            state.selected_provider = count - 1;
+                        }
+                    }
+                    KeyCode::Down => {
+                        state.selected_provider = (state.selected_provider + 1) % count;
+                    }
+                    // Number shortcuts: 1–4
+                    KeyCode::Char('1') => state.selected_provider = 0,
+                    KeyCode::Char('2') => state.selected_provider = 1,
+                    KeyCode::Char('3') => state.selected_provider = 2,
+                    KeyCode::Char('4') => state.selected_provider = 3,
+                    KeyCode::Enter => {
+                        // Advance to the appropriate next step
+                        if let Some(provider) = state.providers.get(state.selected_provider) {
+                            if provider.needs_key {
+                                state.step = SetupStep::ApiKeyInput;
+                            } else if provider.needs_url {
+                                state.step = SetupStep::CustomUrlInput;
+                            } else {
+                                state.step = SetupStep::Complete;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            // ── API key input ────────────────────────────────────────────────
+            SetupStep::ApiKeyInput => {
+                match key {
+                    KeyCode::Char(c) => {
+                        state.key_input.push(c);
+                    }
+                    KeyCode::Backspace => {
+                        state.key_input.pop();
+                    }
+                    KeyCode::Enter => {
+                        // Only advance when we have something
+                        if !state.key_input.is_empty() {
+                            // Check whether we also need a URL
+                            if let Some(provider) = state.providers.get(state.selected_provider) {
+                                if provider.needs_url {
+                                    state.step = SetupStep::CustomUrlInput;
+                                } else {
+                                    state.step = SetupStep::Complete;
+                                }
+                            } else {
+                                state.step = SetupStep::Complete;
+                            }
+                        }
+                    }
+                    KeyCode::Esc => {
+                        // Back to provider selection
+                        state.step = SetupStep::ProviderSelect;
+                    }
+                    _ => {}
+                }
+            }
+
+            // ── Custom URL input ─────────────────────────────────────────────
+            SetupStep::CustomUrlInput => {
+                match key {
+                    KeyCode::Char(c) => {
+                        state.url_input.push(c);
+                    }
+                    KeyCode::Backspace => {
+                        state.url_input.pop();
+                    }
+                    KeyCode::Enter => {
+                        // Accept any non-empty URL (or the default for Ollama)
+                        let url = state.url_input.trim().to_string();
+                        if url.is_empty() {
+                            // Default to localhost Ollama
+                            state.url_input = "http://localhost:11434".to_string();
+                        }
+                        state.step = SetupStep::Complete;
+                    }
+                    KeyCode::Esc => {
+                        // Back: if key was needed go back to key input, else provider select
+                        if let Some(provider) = state.providers.get(state.selected_provider) {
+                            if provider.needs_key {
+                                state.step = SetupStep::ApiKeyInput;
+                            } else {
+                                state.step = SetupStep::ProviderSelect;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            // ── Setup complete — Enter launches TUI ──────────────────────────
+            SetupStep::Complete => {
+                if key == KeyCode::Enter {
+                    return true; // Signal caller to finalize and transition
+                }
+            }
+        }
+
+        false
+    }
+
+    /// Consume the setup state, build a `Config` patch, and transition to
+    /// `AppMode::Running`.  Returns the modified `Config` so the caller can
+    /// persist it via `config.save(path)`.
+    pub fn finish_setup(&mut self, project_root: &Path, config: &Config) -> Config {
+        let mut new_config = config.clone();
+
+        if let Some(ref state) = self.setup_state {
+            if let Some(provider) = state.providers.get(state.selected_provider) {
+                new_config.provider = provider.provider_id.clone();
+                new_config.model = provider.default_model.clone();
+            }
+            if !state.key_input.is_empty() {
+                new_config.api_key = Some(state.key_input.clone());
+            }
+            if !state.url_input.is_empty() {
+                new_config.base_url = Some(state.url_input.clone());
+            }
+        }
+
+        // Populate anemones now that we have a working config
+        self.anemones = Self::discover_anemones(project_root, &new_config);
+        self.setup_state = None;
+        self.mode = AppMode::Running;
+
+        new_config
+    }
+
+    // ── Internal helpers ──────────────────────────────────────────────────────
+
+    fn discover_anemones(project_root: &Path, config: &Config) -> Vec<AnemoneView> {
         let mut anemones = Vec::new();
 
-        // Scan for *_box/ directories
         if let Ok(entries) = std::fs::read_dir(project_root) {
             let mut boxes: Vec<PathBuf> = entries
                 .flatten()
@@ -112,14 +312,10 @@ impl App {
             }
         }
 
-        App {
-            anemones,
-            active_tab: 0,
-            input: String::new(),
-            input_focused: true,
-            should_quit: false,
-        }
+        anemones
     }
+
+    // ── Running-mode helpers ──────────────────────────────────────────────────
 
     pub fn active_view(&self) -> Option<&AnemoneView> {
         self.anemones.get(self.active_tab)

@@ -5,6 +5,7 @@ mod input;
 mod room;
 mod status;
 mod switcher;
+pub mod setup;
 
 use ratatui::prelude::*;
 use ratatui::widgets::Block;
